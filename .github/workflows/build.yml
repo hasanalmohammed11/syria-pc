@@ -13,7 +13,6 @@ jobs:
           java-version: '17'
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
           channel: stable
       - run: flutter create . --platforms=android --org com.syrpc --project-name syria_pc
       - run: sed -i 's/android:label="[^"]*"/android:label="سوق الكمبيوتر"/' android/app/src/main/AndroidManifest.xml
