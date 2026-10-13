@@ -1,9 +1,13 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+// ضع هنا بيانات مشروعك من Supabase (Project Settings > API)
+const supabaseUrl = 'https://bilgzpjavnjtzjswzets.supabase.co';
+const supabaseKey = 'sb_publishable_sQG7syqn_o3gO86rhqatzg_5L3uuFzq';
+SupabaseClient get sb => Supabase.instance.client;
 
 const types = ['لابتوب', 'كمبيوتر مكتبي', 'قطع وملحقات'];
 const conds = ['مستعمل', 'جديد'];
@@ -28,6 +32,7 @@ class Ad {
   String get id => s('id');
   int get price => (m['price'] as num).toInt();
   bool get sold => m['sold'] == true;
+  bool get mine => m['owner'] != null && m['owner'] == sb.auth.currentUser?.id;
   Ad copy({bool? sold}) => Ad({...m, 'sold': sold ?? this.sold});
   String get priceText {
     final cur = s('currency') == 'دولار' ? '\$' : 'ل.س';
@@ -40,7 +45,7 @@ class Ad {
     for (final e in specs.entries) {
       if (e.value.isNotEmpty) l.add('⚙️ ${e.key}: ${e.value}');
     }
-    if (s('desc').isNotEmpty) l.add('📝 ${s('desc')}');
+    if (s('descr').isNotEmpty) l.add('📝 ${s('descr')}');
     l.add('💰 السعر: $priceText');
     l.add('📍 المدينة: ${s('city')}');
     l.add('📞 للتواصل: ${s('phone')}');
@@ -48,7 +53,14 @@ class Ad {
   }
 }
 
-void main() => runApp(const App());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseKey);
+  try {
+    if (sb.auth.currentSession == null) await sb.auth.signInAnonymously();
+  } catch (_) {}
+  runApp(const App());
+}
 
 class App extends StatelessWidget {
   const App({super.key});
@@ -80,39 +92,45 @@ class _HomePageState extends State<HomePage> {
     load();
   }
 
-  Future<void> load() async {
-    final p = await SharedPreferences.getInstance();
-    final raw = p.getString('ads');
-    if (raw != null) {
-      ads = (jsonDecode(raw) as List).map((e) => Ad(Map<String, dynamic>.from(e as Map))).toList();
-    }
-    setState(() => loading = false);
-  }
+  void toast(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  Future<void> save() async {
-    final p = await SharedPreferences.getInstance();
-    await p.setString('ads', jsonEncode(ads.map((a) => a.m).toList()));
+  Future<void> load() async {
+    try {
+      final rows = await sb.from('ads').select().order('created_at', ascending: false);
+      ads = (rows as List).map((e) => Ad(Map<String, dynamic>.from(e as Map))).toList();
+    } catch (_) {
+      if (mounted) toast('تعذّر تحميل الإعلانات، تحقق من الإنترنت');
+    }
+    if (mounted) setState(() => loading = false);
   }
 
   Future<void> add() async {
     final a = await Navigator.push<Ad>(context, MaterialPageRoute(builder: (_) => const FormPage()));
-    if (a != null) {
-      setState(() => ads.insert(0, a));
-      save();
+    if (a == null) return;
+    try {
+      await sb.from('ads').insert(a.m);
+      await load();
+    } catch (_) {
+      if (mounted) toast('تعذّر نشر الإعلان');
     }
   }
 
-  void update(Ad a) {
-    setState(() {
-      final i = ads.indexWhere((x) => x.id == a.id);
-      if (i >= 0) ads[i] = a;
-    });
-    save();
+  Future<void> update(Ad a) async {
+    try {
+      await sb.from('ads').update(a.m).eq('id', a.id);
+      await load();
+    } catch (_) {
+      if (mounted) toast('تعذّر حفظ التعديل');
+    }
   }
 
-  void remove(String id) {
-    setState(() => ads.removeWhere((x) => x.id == id));
-    save();
+  Future<void> remove(String id) async {
+    try {
+      await sb.from('ads').delete().eq('id', id);
+      await load();
+    } catch (_) {
+      if (mounted) toast('تعذّر حذف الإعلان');
+    }
   }
 
   @override
@@ -120,11 +138,11 @@ class _HomePageState extends State<HomePage> {
     final f = ads.where((a) {
       if (type != null && a.s('type') != type) return false;
       if (city != null && a.s('city') != city) return false;
-      final hay = '${a.s('title')} ${a.s('cpu')} ${a.s('ram')} ${a.s('storage')} ${a.s('desc')}'.toLowerCase();
+      final hay = '${a.s('title')} ${a.s('cpu')} ${a.s('ram')} ${a.s('storage')} ${a.s('descr')}'.toLowerCase();
       return q.isEmpty || hay.contains(q.toLowerCase());
     }).toList();
     return Scaffold(
-      appBar: AppBar(title: const Text('سوق الكمبيوتر السوري')),
+      appBar: AppBar(title: const Text('سوق الكمبيوتر السوري'), actions: [IconButton(onPressed: load, icon: const Icon(Icons.refresh))]),
       floatingActionButton: FloatingActionButton.extended(onPressed: add, icon: const Icon(Icons.add), label: const Text('أضف إعلان')),
       body: loading
           ? const Center(child: CircularProgressIndicator())
@@ -257,7 +275,7 @@ class _DetailPageState extends State<DetailPage> {
   Widget build(BuildContext context) {
     final th = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('تفاصيل الإعلان'), actions: [
+      appBar: AppBar(title: const Text('تفاصيل الإعلان'), actions: !ad.mine ? null : [
         IconButton(onPressed: edit, icon: const Icon(Icons.edit)),
         IconButton(onPressed: del, icon: const Icon(Icons.delete_outline)),
       ]),
@@ -273,7 +291,7 @@ class _DetailPageState extends State<DetailPage> {
         row('التخزين', ad.s('storage')),
         row('المدينة', ad.s('city')),
         row('الهاتف', ad.s('phone')),
-        row('الوصف', ad.s('desc')),
+        row('الوصف', ad.s('descr')),
         const Divider(height: 32),
         FilledButton.icon(onPressed: wa, icon: const Icon(Icons.chat), label: const Text('تواصل عبر واتساب')),
         const SizedBox(height: 8),
@@ -290,7 +308,7 @@ class _DetailPageState extends State<DetailPage> {
         SwitchListTile(
           title: const Text('تم البيع'),
           value: ad.sold,
-          onChanged: (v) {
+          onChanged: !ad.mine ? null : (v) {
             final n = ad.copy(sold: v);
             setState(() => ad = n);
             widget.onUpdate(n);
@@ -316,7 +334,7 @@ class _FormPageState extends State<FormPage> {
   late final storage = TextEditingController(text: widget.ad?.s('storage'));
   late final price = TextEditingController(text: widget.ad?.price.toString());
   late final phone = TextEditingController(text: widget.ad?.s('phone'));
-  late final desc = TextEditingController(text: widget.ad?.s('desc'));
+  late final desc = TextEditingController(text: widget.ad?.s('descr'));
   late String type = widget.ad?.s('type') ?? types[0];
   late String cond = widget.ad?.s('cond') ?? conds[0];
   late String city = widget.ad?.s('city') ?? cities[0];
@@ -359,7 +377,7 @@ class _FormPageState extends State<FormPage> {
     Navigator.pop(
       context,
       Ad({
-        'id': widget.ad?.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        ...?widget.ad?.m,
         'title': title.text.trim(),
         'type': type,
         'cond': cond,
@@ -368,10 +386,9 @@ class _FormPageState extends State<FormPage> {
         'storage': storage.text.trim(),
         'city': city,
         'phone': latin(phone.text.trim()),
-        'desc': desc.text.trim(),
+        'descr': desc.text.trim(),
         'currency': currency,
         'price': p,
-        'ts': widget.ad?.m['ts'] ?? DateTime.now().millisecondsSinceEpoch,
         'sold': widget.ad?.sold ?? false,
       }),
     );
