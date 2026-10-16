@@ -18,6 +18,42 @@ jobs:
       - run: sed -i 's/android:label="[^"]*"/android:label="سوق الكمبيوتر"/' android/app/src/main/AndroidManifest.xml
       - run: sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' android/app/src/main/AndroidManifest.xml
       - run: flutter pub get
+      - name: Generate app icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-pil
+          mkdir -p assets
+          /usr/bin/python3 - <<'PY'
+          from PIL import Image, ImageDraw
+          S = 1024
+          def draw(scale, bg):
+              im = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+              if bg:
+                  m = Image.linear_gradient('L').resize((S, S))
+                  a = Image.new('RGB', (S, S), (14, 165, 233))
+                  b = Image.new('RGB', (S, S), (30, 58, 138))
+                  im.paste(Image.composite(a, b, m), (0, 0))
+              d = ImageDraw.Draw(im)
+              def p(x, y):
+                  return (S / 2 + (x - 512) * scale, S / 2 + (y - 512) * scale)
+              def rr(x0, y0, x1, y1, r, fill):
+                  (a0, b0), (a1, b1) = p(x0, y0), p(x1, y1)
+                  d.rounded_rectangle((a0, b0, a1, b1), r * scale, fill=fill)
+              rr(212, 250, 812, 620, 44, (255, 255, 255, 255))
+              rr(244, 282, 780, 588, 26, (11, 31, 92, 255))
+              rr(120, 650, 904, 716, 33, (255, 255, 255, 255))
+              rr(430, 650, 594, 676, 13, (200, 210, 235, 255))
+              rr(290, 335, 520, 370, 17, (125, 211, 252, 255))
+              rr(290, 405, 640, 435, 15, (255, 255, 255, 255))
+              rr(290, 470, 560, 500, 15, (148, 163, 184, 255))
+              (cx, cy), (ex, ey) = p(700, 300), p(790, 390)
+              d.ellipse((cx, cy, ex, ey), fill=(245, 158, 11, 255))
+              rr(722, 336, 768, 354, 9, (255, 255, 255, 255))
+              return im
+          draw(1.0, True).save('assets/icon.png')
+          draw(0.62, False).save('assets/icon_fg.png')
+          PY
+      - run: dart run flutter_launcher_icons
       - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
