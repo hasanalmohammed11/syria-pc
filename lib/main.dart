@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -73,6 +75,7 @@ class Ad {
   bool get sold => m['sold'] == true;
   bool get mine => m['owner'] != null && m['owner'] == sb.auth.currentUser?.id;
   Ad copy({bool? sold}) => Ad({...m, 'sold': sold ?? this.sold});
+  List<String> get images => ((m['images'] ?? []) as List).map((e) => e.toString()).toList();
   List<String> get specs => [s('cpu'), s('ram'), s('storage')].where((e) => e.isNotEmpty).toList();
   String get priceText {
     final cur = s('currency') == 'دولار' ? '\$' : 'ل.س';
@@ -287,6 +290,12 @@ class _HomePageState extends State<HomePage> {
       return q.isEmpty || hay.contains(q.toLowerCase());
     }).toList();
     return Scaffold(
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Text('Developed by Hasan', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: cs.outline)),
+        ),
+      ),
       floatingActionButton: FloatingActionButton.extended(onPressed: add, icon: const Icon(Icons.add), label: const Text('أضف إعلان')),
       body: RefreshIndicator(
         onRefresh: load,
@@ -352,13 +361,21 @@ class AdCard extends StatelessWidget {
               padding: const EdgeInsets.all(12),
               child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Container(
-                  width: 58,
-                  height: 58,
+                  width: 70,
+                  height: 70,
+                  clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     gradient: LinearGradient(colors: [c, Color.lerp(c, Colors.black, .3)!]),
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Icon(typeIcons[i], color: Colors.white, size: 30),
+                  child: ad.images.isEmpty
+                      ? Icon(typeIcons[i], color: Colors.white, size: 32)
+                      : Image.network(
+                          ad.images.first,
+                          fit: BoxFit.cover,
+                          cacheWidth: 300,
+                          errorBuilder: (_, __, ___) => Icon(typeIcons[i], color: Colors.white, size: 32),
+                        ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -493,7 +510,7 @@ class _DetailPageState extends State<DetailPage> {
                 IconButton(onPressed: del, icon: const Icon(Icons.delete_outline, color: Colors.white)),
               ],
             ]),
-            Icon(typeIcons[i], size: 60, color: Colors.white),
+            if (ad.images.isEmpty) Icon(typeIcons[i], size: 60, color: Colors.white) else Gallery(urls: ad.images),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text(ad.s('title'), textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
@@ -547,6 +564,67 @@ class _DetailPageState extends State<DetailPage> {
   }
 }
 
+class Gallery extends StatefulWidget {
+  final List<String> urls;
+  const Gallery({super.key, required this.urls});
+  @override
+  State<Gallery> createState() => _GalleryState();
+}
+
+class _GalleryState extends State<Gallery> {
+  int cur = 0;
+
+  void zoom(String url) {
+    showDialog(
+      context: context,
+      builder: (c) => Dialog(
+        insetPadding: EdgeInsets.zero,
+        backgroundColor: Colors.black,
+        child: Stack(children: [
+          Center(child: InteractiveViewer(child: Image.network(url))),
+          Positioned(top: 8, right: 8, child: IconButton(onPressed: () => Navigator.pop(c), icon: const Icon(Icons.close, color: Colors.white))),
+        ]),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Column(children: [
+          SizedBox(
+            height: 230,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: PageView.builder(
+                itemCount: widget.urls.length,
+                onPageChanged: (x) => setState(() => cur = x),
+                itemBuilder: (_, k) => GestureDetector(
+                  onTap: () => zoom(widget.urls[k]),
+                  child: Image.network(
+                    widget.urls[k],
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image, color: Colors.white54, size: 48)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            for (var k = 0; k < widget.urls.length; k++)
+              Container(
+                width: 8,
+                height: 8,
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                decoration: BoxDecoration(shape: BoxShape.circle, color: k == cur ? Colors.white : Colors.white38),
+              ),
+          ]),
+        ]),
+      );
+}
+
 class FormPage extends StatefulWidget {
   final Ad? ad;
   const FormPage({super.key, this.ad});
@@ -567,6 +645,9 @@ class _FormPageState extends State<FormPage> {
   late String cond = widget.ad?.s('cond') ?? conds[0];
   late String city = widget.ad?.s('city') ?? cities[0];
   late String currency = widget.ad?.s('currency') ?? currencies[0];
+  late final List<String> urls = widget.ad?.images ?? [];
+  final List<XFile> picked = [];
+  bool saving = false;
 
   @override
   void dispose() {
@@ -592,27 +673,105 @@ class _FormPageState extends State<FormPage> {
         child: Text(t, style: const TextStyle(fontWeight: FontWeight.bold)),
       );
 
-  void submit() {
-    if (!key.currentState!.validate()) return;
-    final p = int.tryParse(latin(price.text).replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-    Navigator.pop(
-      context,
-      Ad({
-        ...?widget.ad?.m,
-        'title': title.text.trim(),
-        'type': type,
-        'cond': cond,
-        'cpu': cpu.text.trim(),
-        'ram': ram.text.trim(),
-        'storage': storage.text.trim(),
-        'city': city,
-        'phone': latin(phone.text.trim()),
-        'descr': desc.text.trim(),
-        'currency': currency,
-        'price': p,
-        'sold': widget.ad?.sold ?? false,
-      }),
-    );
+  Future<void> pick() async {
+    final left = 3 - urls.length - picked.length;
+    if (left <= 0) return;
+    try {
+      final p = ImagePicker();
+      List<XFile> xs;
+      if (left == 1) {
+        final x = await p.pickImage(source: ImageSource.gallery, imageQuality: 70, maxWidth: 1280);
+        xs = x == null ? [] : [x];
+      } else {
+        xs = await p.pickMultiImage(imageQuality: 70, maxWidth: 1280, limit: left);
+      }
+      if (!mounted) return;
+      setState(() => picked.addAll(xs.take(left)));
+    } catch (_) {
+      toast(context, 'تعذّر اختيار الصور');
+    }
+  }
+
+  Widget photos() {
+    final cs = Theme.of(context).colorScheme;
+    Widget tile(Widget child, VoidCallback onRemove) => Stack(children: [
+          ClipRRect(borderRadius: BorderRadius.circular(14), child: SizedBox(width: 96, height: 96, child: child)),
+          Positioned(
+            top: 4,
+            right: 4,
+            child: GestureDetector(
+              onTap: onRemove,
+              child: const CircleAvatar(radius: 12, backgroundColor: Colors.black54, child: Icon(Icons.close, size: 15, color: Colors.white)),
+            ),
+          ),
+        ]);
+    return Wrap(spacing: 10, runSpacing: 10, children: [
+      for (var k = 0; k < urls.length; k++) tile(Image.network(urls[k], fit: BoxFit.cover), () => setState(() => urls.removeAt(k))),
+      for (var k = 0; k < picked.length; k++) tile(Image.file(File(picked[k].path), fit: BoxFit.cover), () => setState(() => picked.removeAt(k))),
+      if (urls.length + picked.length < 3)
+        InkWell(
+          onTap: pick,
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            width: 96,
+            height: 96,
+            decoration: BoxDecoration(color: cs.surfaceContainerHigh, borderRadius: BorderRadius.circular(14), border: Border.all(color: cs.outlineVariant)),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(Icons.add_a_photo_outlined, color: cs.primary),
+              const SizedBox(height: 4),
+              Text('إضافة', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+            ]),
+          ),
+        ),
+    ]);
+  }
+
+  Future<void> submit() async {
+    if (!key.currentState!.validate() || saving) return;
+    setState(() => saving = true);
+    try {
+      final all = [...urls];
+      if (picked.isNotEmpty) {
+        if (!await ensureAuth()) throw 'فعّل Allow anonymous sign-ins في Supabase';
+        final uid = sb.auth.currentUser!.id;
+        for (var i = 0; i < picked.length; i++) {
+          final png = picked[i].path.toLowerCase().endsWith('.png');
+          final path = '$uid/${DateTime.now().millisecondsSinceEpoch}_$i.${png ? 'png' : 'jpg'}';
+          await sb.storage.from('ad-images').uploadBinary(
+                path,
+                await picked[i].readAsBytes(),
+                fileOptions: FileOptions(contentType: png ? 'image/png' : 'image/jpeg'),
+              );
+          all.add(sb.storage.from('ad-images').getPublicUrl(path));
+        }
+      }
+      final p = int.tryParse(latin(price.text).replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+      if (!mounted) return;
+      Navigator.pop(
+        context,
+        Ad({
+          ...?widget.ad?.m,
+          'title': title.text.trim(),
+          'type': type,
+          'cond': cond,
+          'cpu': cpu.text.trim(),
+          'ram': ram.text.trim(),
+          'storage': storage.text.trim(),
+          'city': city,
+          'phone': latin(phone.text.trim()),
+          'descr': desc.text.trim(),
+          'currency': currency,
+          'price': p,
+          'images': all,
+          'sold': widget.ad?.sold ?? false,
+        }),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => saving = false);
+        toast(context, 'تعذّر رفع الصور: ${errText(e)}');
+      }
+    }
   }
 
   @override
@@ -623,15 +782,18 @@ class _FormPageState extends State<FormPage> {
             padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
             child: FilledButton.icon(
               style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              onPressed: submit,
-              icon: const Icon(Icons.check),
-              label: const Text('نشر الإعلان'),
+              onPressed: saving ? null : submit,
+              icon: saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.check),
+              label: Text(saving ? 'جارٍ الرفع...' : 'نشر الإعلان'),
             ),
           ),
         ),
         body: Form(
           key: key,
           child: ListView(padding: const EdgeInsets.all(16), children: [
+            label('صور الجهاز (حتى 3 صور)'),
+            photos(),
+            const SizedBox(height: 14),
             label('نوع الجهاز'),
             Wrap(spacing: 8, children: [
               for (var i = 0; i < types.length; i++)
