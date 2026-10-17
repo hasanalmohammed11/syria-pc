@@ -293,7 +293,7 @@ class _HomePageState extends State<HomePage> {
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Text('Developed by Hasan', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: cs.outline)),
+          child: Text('Developer by Hasan', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: cs.outline)),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(onPressed: add, icon: const Icon(Icons.add), label: const Text('أضف إعلان')),
